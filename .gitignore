@@ -1,0 +1,35 @@
+# Azure credentials and secrets
+*.env
+*.secret
+credentials.json
+parameters.json
+
+# Deployment scripts and infrastructure
+deploy.sh
+teardown.sh
+main.bicep
+*.zip
+
+# Deployment outputs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/demo files
+apim-policy-configured.xml
+*-test.xml
+*-demo.xml
+function-app/
+function-app-csharp/
+
+# Documentation
+*.pdf

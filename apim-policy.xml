@@ -1,0 +1,238 @@
+<!--
+    Azure APIM Policy for OTLP Distributed Tracing
+
+    This policy enables distributed tracing by:
+    1. Parsing or generating W3C traceparent header (Trace Context)
+    2. Forwarding trace context to backend services
+    3. Sending OTLP trace spans to Grafana Alloy asynchronously
+
+    Configuration required:
+    - Replace ALLOY_OTLP_ENDPOINT with your Alloy ingress URL
+    - Apply at API or Global policy level
+-->
+<policies>
+    <inbound>
+        <!--
+            Parse incoming traceparent header to extract parent span ID
+            Format: 00-{traceId}-{spanId}-{flags}
+        -->
+        <set-variable name="parent_span_id" value="@{
+            var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
+            if (traceparentHeader.Value == null || !traceparentHeader.Value.Any()) {
+                return null;
+            }
+            string traceparent = traceparentHeader.Value.First();
+            if (string.IsNullOrEmpty(traceparent)) {
+                return null;
+            }
+            string[] parts = traceparent.Split('-');
+            if (parts.Length >= 3) {
+                return parts[2]; // Current span becomes parent
+            }
+            return null;
+        }" />
+
+        <!-- Generate new span ID and update traceparent header -->
+        <set-header name="traceparent" exists-action="override">
+            <value>@{
+                const string allowedChars = "abcdef0123456789";
+                int spanIdLength = 16;
+                Random rand = new Random();
+                char[] spanIdChars = new char[spanIdLength];
+
+                // Generate random span ID
+                for (int i = 0; i < spanIdLength; i++) {
+                    spanIdChars[i] = allowedChars[rand.Next(0, allowedChars.Length)];
+                }
+                string newSpanId = new string(spanIdChars);
+
+                // Check if traceparent already exists
+                var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals("traceparent", StringComparison.OrdinalIgnoreCase));
+                string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : null;
+                string traceId = "";
+
+                if (string.IsNullOrEmpty(traceparent)) {
+                    // Generate new trace ID (32 hex chars)
+                    traceId = Guid.NewGuid().ToString().Replace("-", "");
+                } else {
+                    // Extract existing trace ID
+                    string[] parts = traceparent.Split('-');
+                    traceId = parts.Length >= 2 ? parts[1] : Guid.NewGuid().ToString().Replace("-", "");
+                }
+
+                // Return new traceparent: version-traceId-spanId-flags
+                return "00-" + traceId + "-" + newSpanId + "-01";
+            }</value>
+        </set-header>
+
+        <base />
+    </inbound>
+
+    <backend>
+        <base />
+    </backend>
+
+    <outbound>
+        <!--
+            Send OTLP trace span to Grafana Alloy
+            Uses async send-request so it doesn't block the response
+        -->
+        <send-request mode="new" response-variable-name="alloy-response" timeout="3" ignore-error="true">
+            <!-- Replace with your Alloy OTLP HTTP endpoint -->
+            <set-url>https://ALLOY_OTLP_ENDPOINT/v1/traces</set-url>
+            <set-method>POST</set-method>
+
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+
+            <!-- Build OTLP JSON span payload -->
+            <set-body>@{
+                // Extract trace context from traceparent header
+                var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals("traceparent", StringComparison.OrdinalIgnoreCase));
+                string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : "00-00000000000000000000000000000000-0000000000000000-00";
+                string[] parts = traceparent.Split('-');
+                string traceId = parts[1];   // 32 hex chars
+                string spanId = parts[2];     // 16 hex chars
+                string parentSpanId = context.Variables.ContainsKey("parent_span_id") ? (string)context.Variables["parent_span_id"] : null;
+
+                // Calculate timestamps (OTLP uses nanoseconds since Unix epoch)
+                long startTimeMs = ((DateTimeOffset)context.Timestamp).ToUnixTimeMilliseconds();
+                long endTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long startTimeNanos = startTimeMs * 1000000;
+                long endTimeNanos = endTimeMs * 1000000;
+
+                // Build OTLP span with OpenTelemetry semantic conventions
+                var span = new JObject(
+                    new JProperty("traceId", traceId),
+                    new JProperty("spanId", spanId),
+                    new JProperty("name", $"apim: {context.Request.Method} {context.Request.Url.Path}"),
+                    new JProperty("kind", 2), // SPAN_KIND_SERVER
+                    new JProperty("startTimeUnixNano", startTimeNanos.ToString()),
+                    new JProperty("endTimeUnixNano", endTimeNanos.ToString()),
+                    new JProperty("attributes", new JArray(
+                        // HTTP semantic conventions
+                        new JObject(
+                            new JProperty("key", "http.method"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Request.Method)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "http.target"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Request.Url.Path)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "http.url"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Request.Url.ToString())))
+                        ),
+                        new JObject(
+                            new JProperty("key", "http.host"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Request.Url.Host)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "http.status_code"),
+                            new JProperty("value", new JObject(new JProperty("intValue", context.Response.StatusCode)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "http.client_ip"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Request.IpAddress)))
+                        ),
+                        // APIM-specific attributes
+                        new JObject(
+                            new JProperty("key", "apim.api.name"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Api.Name)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "apim.product.name"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Product?.Name ?? "none")))
+                        ),
+                        new JObject(
+                            new JProperty("key", "apim.subscription.name"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Subscription?.Name ?? "none")))
+                        ),
+                        new JObject(
+                            new JProperty("key", "apim.request.id"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.RequestId)))
+                        ),
+                        new JObject(
+                            new JProperty("key", "apim.region"),
+                            new JProperty("value", new JObject(new JProperty("stringValue", context.Deployment.Region)))
+                        )
+                    ))
+                );
+
+                // Add parent span ID if exists (maintains trace hierarchy)
+                if (!string.IsNullOrEmpty(parentSpanId)) {
+                    span.Add("parentSpanId", parentSpanId);
+                }
+
+                // Build OTLP resourceSpans structure
+                var scopeSpan = new JObject(
+                    new JProperty("scope", new JObject(
+                        new JProperty("name", "apim-instrumentation")
+                    )),
+                    new JProperty("spans", new JArray(span))
+                );
+
+                var resourceSpan = new JObject(
+                    new JProperty("resource", new JObject(
+                        new JProperty("attributes", new JArray(
+                            new JObject(
+                                new JProperty("key", "service.name"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "apim-gateway")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "service.version"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "1.0.0")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "service.namespace"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "azure-apim")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "telemetry.sdk.name"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "apim-policy")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "telemetry.sdk.language"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "csharp")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "telemetry.sdk.version"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "1.0.0")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "cloud.provider"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "azure")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "cloud.platform"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "azure_apim")))
+                            ),
+                            new JObject(
+                                new JProperty("key", "cloud.region"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", context.Deployment.Region)))
+                            ),
+                            new JObject(
+                                new JProperty("key", "deployment.environment"),
+                                new JProperty("value", new JObject(new JProperty("stringValue", "production")))
+                            )
+                        ))
+                    )),
+                    new JProperty("scopeSpans", new JArray(scopeSpan))
+                );
+
+                var otlpPayload = new JObject(
+                    new JProperty("resourceSpans", new JArray(resourceSpan))
+                );
+
+                return otlpPayload.ToString(Newtonsoft.Json.Formatting.None);
+            }</set-body>
+        </send-request>
+
+        <base />
+    </outbound>
+
+    <on-error>
+        <base />
+    </on-error>
+</policies>
