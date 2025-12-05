@@ -6,12 +6,30 @@ End-to-end distributed tracing for Azure API Management using OpenTelemetry and 
 
 This APIM policy enables complete distributed traces showing requests flowing through your API gateway to backend services, with automatic integration into Grafana Cloud's Application Observability and Service Graph.
 
-**What you get:**
-- Complete APIM → Backend distributed traces
-- Service Graph visualization
-- Application Observability auto-discovery
-- W3C Trace Context propagation
-- RED metrics from traces
+## What This Achieves
+
+**The Problem:**
+Without distributed tracing, you see APIM and backend as separate systems. When requests are slow or failing, you can't see the complete journey through your architecture.
+
+**This Solution:**
+- ✅ **True distributed tracing** - Parent-child span relationships between APIM and backends
+- ✅ **W3C Trace Context** - Standards-based propagation via `traceparent` header
+- ✅ **Service Graph** - Automatic topology visualization showing service dependencies
+- ✅ **Application Observability** - Services appear automatically with RED metrics
+- ✅ **Vendor neutral** - Works with any OTLP collector (Alloy, Jaeger, Tempo, etc.)
+- ✅ **Real-time** - See traces immediately, not hours later
+- ✅ **Cost effective** - ~$40-50/month for 10M requests (Grafana Cloud free tier covers most use cases)
+
+**vs. Alternatives:**
+- **EventHub logging**: Just logs, no trace relationships, higher cost, delayed visibility
+- **Application Insights**: Azure-only, expensive at scale, limited W3C support
+- **Log Analytics**: Not real-time, no service graph, designed for audit not tracing
+
+**Use this if:**
+- You have microservices with OpenTelemetry instrumentation
+- You want true distributed tracing with service graphs
+- You use Grafana Cloud, Tempo, or Jaeger
+- You need vendor neutrality
 
 **Verified with:** Azure APIM Developer SKU, Azure Functions, Grafana Cloud Tempo
 
