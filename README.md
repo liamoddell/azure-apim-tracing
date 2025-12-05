@@ -11,7 +11,7 @@ Already have Grafana Cloud and an OTLP collector? Just apply the policy:
 1. **Download:** `apim-policy.xml`
 2. **Edit 3 lines:**
    - Line 82: Your OTLP endpoint URL
-   - Line 160: Your backend's `service.name` (for peer.service)
+   - Line 181: Your backend's `service.name` (for peer.service)
    - Line 217: Your environment name (e.g., "production")
 3. **Apply:** APIM → APIs → Your API → Policies → Paste → Save
 4. **Verify:** Backend exports traces to same collector and sets `deployment.environment` resource attribute
