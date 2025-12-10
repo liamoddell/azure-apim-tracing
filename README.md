@@ -1,432 +1,163 @@
-# Azure APIM Distributed Tracing with Grafana Cloud
+# Azure APIM Distributed Tracing with OpenTelemetry
 
-End-to-end distributed tracing for Azure API Management using OpenTelemetry and Grafana Alloy.
+Production-ready APIM policy for distributed tracing using W3C Trace Context and OTLP.
 
-## Overview
+## What This Is
 
-This APIM policy enables complete distributed traces showing requests flowing through your API gateway to backend services, with automatic integration into Grafana Cloud's Application Observability and Service Graph.
+An Azure API Management policy that enables complete distributed tracing across your API gateway and backend services. Traces are sent to any OTLP-compatible collector (Grafana Alloy, Jaeger, Tempo, etc.) using the OpenTelemetry Protocol.
 
-## What This Achieves
+**Key capabilities:**
+- ✅ W3C Trace Context propagation via `traceparent` header
+- ✅ OTLP span generation with Liquid templates
+- ✅ Service Graph integration (shows APIM → Backend connections)
+- ✅ Application Observability with RED metrics
+- ✅ Vendor-neutral (works with any OTLP collector)
 
-**The Problem:**
-Without distributed tracing, you see APIM and backend as separate systems. When requests are slow or failing, you can't see the complete journey through your architecture.
+## Why This Exists
 
-**This Solution:**
-- ✅ **True distributed tracing** - Parent-child span relationships between APIM and backends
-- ✅ **W3C Trace Context** - Standards-based propagation via `traceparent` header
-- ✅ **Service Graph** - Automatic topology visualization showing service dependencies
-- ✅ **Application Observability** - Services appear automatically with RED metrics
-- ✅ **Vendor neutral** - Works with any OTLP collector (Alloy, Jaeger, Tempo, etc.)
-- ✅ **Real-time** - See traces immediately, not hours later
-- ✅ **Cost effective** - ~$40-50/month for 10M requests (Grafana Cloud free tier covers most use cases)
+Without distributed tracing, APIM and backend services appear as disconnected systems. When requests are slow or failing, you can't see the complete journey through your architecture.
+
+This policy provides end-to-end visibility by:
+- Creating properly linked parent-child span relationships
+- Automatically generating service topology graphs
+- Enabling root cause analysis from gateway to backend services
+- Supporting standards-based observability (OpenTelemetry, W3C)
 
 **vs. Alternatives:**
-- **EventHub logging**: Just logs, no trace relationships, higher cost, delayed visibility
-- **Application Insights**: Azure-only, expensive at scale, limited W3C support
-- **Log Analytics**: Not real-time, no service graph, designed for audit not tracing
+- **EventHub/Log Analytics**: No trace relationships, delayed visibility, not real-time
+- **Application Insights**: Azure-only, expensive at scale, limited W3C Trace Context support
 
-**Use this if:**
-- You have microservices with OpenTelemetry instrumentation
-- You want true distributed tracing with service graphs
-- You use Grafana Cloud, Tempo, or Jaeger
-- You need vendor neutrality
+## Repository Contents
 
-**Verified with:** Azure APIM Developer SKU, Azure Functions, Grafana Cloud Tempo
+### Policy Files
 
-## Implementation Approaches
+**`apim-policy.xml`** - Complete policy for single API testing/deployment
+- Customize 3 lines: endpoint URL (line 125), backend service name (line 176), environment (line 147)
+- Uses Liquid templates to build OTLP JSON with dynamic context variables
+- Apply via Azure Portal: API → Policies → Outbound → Paste
 
-### Quick Start (Testing/Single API)
+**`apim-policy-fragment.xml`** - Production-ready fragment for multi-API deployments
+- Upload as policy fragment with ID `otlp-tracing`
+- Reference APIM Named Value for collector endpoint
+- Include in API policies: `<include-fragment fragment-id="otlp-tracing" />`
 
-1. **Download:** `apim-policy.xml`
-2. **Customise 3 values:**
-   - **Line 125**: OTLP endpoint URL
-     ```xml
-     <set-url>https://your-alloy.azurecontainerapps.io/v1/traces</set-url>
-     ```
-   - **Line 176**: Backend service name (must match backend's `service.name`)
-     ```json
-     { "key": "peer.service", "value": { "stringValue": "your-backend-service" } }
-     ```
-   - **Line 147**: Environment name (production/staging/dev)
-     ```json
-     { "key": "deployment.environment", "value": { "stringValue": "production" } }
-     ```
-3. **Apply:** APIM → APIs → Your API → Policies → Paste → Save
+**`apim-policy-simple.xml`** - Minimal variant for quick prototyping
 
-**How it works:** The policy uses Liquid templates to dynamically build OTLP JSON payloads with context variables (e.g., `{{context.Variables.trace_id}}`, `{{context.Request.Method}}`), generating proper OpenTelemetry spans at runtime.
+### Key Configuration Points
 
-### Production (Policy Fragments)
+All three policy files require these values:
 
-For multi-API deployments, use fragments for centralised management:
+| What | Where | Example |
+|------|-------|---------|
+| Collector endpoint | Line 125 (policy.xml) | `https://alloy.example.com/v1/traces` |
+| Backend service name | Line 176 (policy.xml) | Must match backend's `service.name` |
+| Environment | Line 147 (policy.xml) | `production`, `staging`, `dev` |
 
-1. **Create Named Value:** `alloy-otlp-endpoint` = `https://your-alloy.azurecontainerapps.io`
-2. **Create Fragment:** Upload `apim-policy-fragment.xml` with ID `otlp-tracing`
-3. **Apply to APIs:**
-   ```xml
-   <outbound>
-       <include-fragment fragment-id="otlp-tracing" />
-       <base />
-   </outbound>
-   ```
+## Quick Start
 
-**Benefits:** Update once, applies everywhere. No per-API configuration.
+1. **Deploy an OTLP collector** (Grafana Alloy, Jaeger, etc.)
+2. **Download `apim-policy.xml`** and customize the 3 values above
+3. **Apply to your API** via Azure Portal or CLI
+4. **Configure your backend** to:
+   - Propagate `traceparent` header (automatic with OpenTelemetry SDKs)
+   - Set `service.name` resource attribute (must match line 176 in policy)
+   - Set `deployment.environment` resource attribute (required for metrics)
+   - Export traces to same collector
 
-## Full Setup (New Users)
+**Result:** Complete distributed traces showing APIM → Backend with service graph visualization.
 
-### Prerequisites
-
-- Azure APIM (Developer SKU minimum)
-- Grafana Cloud account ([free tier](https://grafana.com/auth/sign-up/create-user))
-- Backend service with OpenTelemetry instrumentation
-
-### Step 1: Get Grafana Cloud Credentials
-
-1. Login to Grafana Cloud → Connections → Add new connection → Hosted OTLP
-2. Copy these values:
-   ```bash
-   OTLP Endpoint: https://otlp-gateway-prod-xx-x.grafana.net/otlp
-   Instance ID: your-instance-id
-   API Key: glc_...
-   ```
-
-### Step 2: Deploy Grafana Alloy
-
-Using Azure Container Apps:
-
-```bash
-# Set variables
-export RG="your-resource-group"
-export LOCATION="uksouth"
-
-# Create environment
-az containerapp env create --name alloy-env --resource-group $RG --location $LOCATION
-
-# Deploy Alloy
-az containerapp create \
-  --name grafana-alloy --resource-group $RG --environment alloy-env \
-  --image grafana/alloy:latest --target-port 4318 --ingress external \
-  --cpu 0.5 --memory 1Gi --min-replicas 1 --max-replicas 3 \
-  --secrets \
-    grafana-cloud-otlp-endpoint="https://otlp-gateway-prod-xx-x.grafana.net/otlp" \
-    grafana-cloud-instance-id="your-instance-id" \
-    grafana-cloud-api-key="glc_..." \
-  --env-vars \
-    GRAFANA_CLOUD_OTLP_ENDPOINT=secretref:grafana-cloud-otlp-endpoint \
-    GRAFANA_CLOUD_INSTANCE_ID=secretref:grafana-cloud-instance-id \
-    GRAFANA_CLOUD_API_KEY=secretref:grafana-cloud-api-key
-
-# Get Alloy URL
-az containerapp show --name grafana-alloy --resource-group $RG \
-  --query "properties.configuration.ingress.fqdn" -o tsv
-```
-
-See `alloy-config.alloy` for the configuration (automatically embedded in Container App).
-
-### Step 3: Configure APIM Policy
-
-1. Download `apim-policy.xml`
-2. Customize these 3 values:
-
-   **Line 125** - Alloy endpoint:
-   ```xml
-   <set-url>https://your-alloy.azurecontainerapps.io/v1/traces</set-url>
-   ```
-
-   **Line 176** - Backend service name:
-   ```json
-   { "key": "peer.service", "value": { "stringValue": "your-backend-service" } }
-   ```
-   ⚠️ Must exactly match your backend's `service.name` resource attribute
-
-   **Line 147** - Environment:
-   ```json
-   { "key": "deployment.environment", "value": { "stringValue": "production" } }
-   ```
-
-3. Apply via Azure Portal or CLI:
-   ```bash
-   az rest --method put \
-     --url "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/YOUR-APIM/apis/YOUR-API/policies/policy?api-version=2024-05-01" \
-     --body "$(jq -Rs '{properties: {format: "rawxml", value: .}}' apim-policy.xml)" \
-     --headers "Content-Type=application/json"
-   ```
-
-### Step 4: Configure Backend
-
-Ensure your backend:
-
-1. Exports traces to same Alloy endpoint
-2. Propagates the `traceparent` header (automatic with most OTEL SDKs)
-3. Sets these resource attributes:
-   ```javascript
-   {
-     'service.name': 'your-backend-service',      // Must match APIM policy!
-     'deployment.environment': 'production',       // Required
-     'service.version': '1.0.0',
-     'service.namespace': 'your-namespace'
-   }
-   ```
-
-### Step 5: Test
-
-The example deployment includes a realistic multi-service architecture demonstrating distributed tracing:
-
-**Services:**
-- **Orders Service:** Creates orders, orchestrates inventory and payment checks
-- **Inventory Service:** Checks product availability
-- **Payment Service:** Processes payments (90% success rate for testing failures)
-- **Echo Service:** Simple test endpoint
-
-**Test distributed tracing:**
-```bash
-# Create an order (generates 4-service trace)
-curl -X POST https://your-apim.azure-api.net/api/orders \
-  -H 'Content-Type: application/json' \
-  -d '{"productId":"LAPTOP-001","quantity":2}'
-
-# Check inventory
-curl https://your-apim.azure-api.net/api/inventory/LAPTOP-001
-
-# Use the test script
-./test-tracing.sh https://your-apim.azure-api.net
-```
-
-**Verify in Grafana Cloud:**
-- **Tempo → Service Graph:** `apim-gateway` → `backend-service` with service dependencies
-- **Application Observability:** Both services with RED metrics
-- **Trace view:** Complete trace showing:
-  ```
-  apim-gateway (POST /orders)
-    └─> backend-service (CreateOrder)
-        ├─> backend-service (CheckInventory)
-        └─> backend-service (ProcessPayment)
-  ```
-
-## Architecture
+## How It Works
 
 ```
-Client → [APIM Gateway] → [Backend Service]
-              ↓                    ↓
-         Emit OTLP Span       Emit OTLP Span
-              ↓                    ↓
-              └──────→ [Alloy] ←───┘
-                          ↓
-                  [Grafana Cloud Tempo]
+Client Request
+    ↓
+[APIM Policy]
+    ├─ Parse/generate traceparent header
+    ├─ Build OTLP span with Liquid template
+    ├─ Send to collector (fire-and-forget)
+    └─ Forward traceparent to backend
+            ↓
+    [Backend Service]
+        ├─ Receive traceparent
+        ├─ Create child spans
+        └─ Send to collector
+                ↓
+        [OTLP Collector]
+            └─ Forward to observability platform
+                    ↓
+            [Tempo/Jaeger/etc]
+                └─ Service Graph + Traces
 ```
 
-**Trace flow:**
-1. APIM generates/propagates `traceparent` header (W3C Trace Context)
-2. APIM emits span to Alloy with OTLP
-3. Backend receives `traceparent`, continues trace
-4. Backend emits span to Alloy
-5. Alloy forwards to Grafana Cloud
-6. Tempo creates complete trace with parent-child relationships
+## Requirements
 
-## Configuration Reference
+**APIM:**
+- Developer SKU or higher
+- Outbound policy access
 
-### Critical Resource Attributes
+**Backend:**
+- OpenTelemetry SDK (any language)
+- Resource attributes: `service.name`, `deployment.environment`
+- Export to same collector endpoint
 
-The policy sets these resource-level attributes (required for Application Observability):
+**Collector:**
+- OTLP HTTP support (port 4318)
+- Can be Grafana Alloy, Jaeger, Tempo, or any OTLP-compatible collector
 
-| Attribute | Purpose | Value |
-|-----------|---------|-------|
-| `service.name` | Service identifier | `apim-gateway` |
-| `deployment.environment` | **Required for metrics** | Your environment name |
-| `cloud.region` | Regional dimension | `context.Deployment.Region` |
-| `service.version` | Service version | `1.0.0` |
-| `service.namespace` | Logical grouping | `azure-apim` |
+## Critical Configuration
 
-### Service Graph Requirements
-
-For services to connect in the Service Graph:
+**Service Graph Connection:**
+The `peer.service` attribute in the APIM policy (line 176) **must exactly match** the backend's `service.name` resource attribute (case-sensitive). This is how the service graph connects APIM → Backend.
 
 ```
-APIM Policy (line 160):           Backend Config:
-peer.service = "backend-api"   →  service.name = "backend-api"
-                                  ✅ MUST MATCH EXACTLY
+APIM Policy:                          Backend Config:
+peer.service = "my-api"          →    service.name = "my-api"
+                                 ✅ MUST MATCH
 ```
 
-The `peer.service` span attribute tells Tempo which service APIM is calling. This must match the backend's `service.name` resource attribute (case-sensitive).
+**Metrics Generation:**
+The `deployment.environment` resource attribute (line 147) is required by most observability platforms to generate RED metrics (Rate, Errors, Duration).
 
-## Troubleshooting
+## Liquid Template Syntax
 
-### Traces Not Appearing
-
-Check Alloy is receiving traces:
-```bash
-az containerapp logs show --name grafana-alloy --resource-group $RG --tail 50
-```
-
-Look for errors or connection issues to Grafana Cloud.
-
-### Service Not in Application Observability
-
-**Cause:** Missing `deployment.environment` resource attribute
-
-**Fix:** Verify line 217 in the policy sets this value. This attribute is required by Tempo's metrics generator to create metrics that feed Application Observability.
-
-### Service Graph Not Connecting Services
-
-**Causes:**
-1. `peer.service` (line 160) doesn't match backend's `service.name`
-2. Backend not setting `service.name` resource attribute
-3. `traceparent` header not being propagated
-
-**Fix:**
-1. Check backend's OpenTelemetry configuration for `service.name`
-2. Update APIM policy line 160 to match exactly
-3. Verify in trace JSON: APIM `spanId` should equal backend `parentSpanId`
-
-### Only Some Traces Appearing
-
-**Cause:** Grafana Cloud tail sampling enabled
-
-**Fix:** Temporarily disable tail sampling in Grafana Cloud Tempo settings for testing.
-
-## Advanced
-
-### Custom Span Attributes
-
-The policy uses **Liquid templates** to dynamically build OTLP JSON payloads. Add custom attributes in the `attributes` array (around line 165+):
-
-```json
-{ "key": "custom.attribute", "value": { "stringValue": "{{context.Variables.my_value}}" } },
-{ "key": "custom.user_id", "value": { "stringValue": "{{context.User.Id}}" } }
-```
-
-**Available context variables:**
-- `{{context.Request.Method}}`, `{{context.Request.Url}}`
-- `{{context.Response.StatusCode}}`
-- `{{context.Variables.your_variable}}`
-- `{{context.Api.Name}}`, `{{context.Product.Name}}`
-- `{{context.Deployment.Region}}`
-
-The Liquid template is evaluated at runtime, allowing dynamic span attributes based on request/response context.
-
-### Environment-Based Configuration
-
-Use APIM Named Values (recommended for production):
-
-1. Create Named Value: `alloy-endpoint`
-2. Reference in fragment: `<set-url>{{alloy-endpoint}}/v1/traces</set-url>`
-
-### Multi-Region Deployment
-
-For multi-region APIM:
-1. Deploy Alloy in each region
-2. Use region-specific Named Values
-3. `cloud.region` automatically captures deployment region from `context.Deployment.Region`
-
-### Backend Service Requirements
-
-For complete distributed tracing, ensure backends:
-
-1. **Propagate traceparent header** (automatic with most OTEL SDKs)
-2. **Set resource attributes:**
-   ```csharp
-   .ConfigureResource(resource => resource
-       .AddService("backend-service", "1.0.0")
-       .AddAttributes(new Dictionary<string, object>
-       {
-           ["deployment.environment"] = "production"  // Required
-       }))
-   ```
-3. **Export to same Alloy endpoint**
-
-The included C# Function App demonstrates this with:
-- OpenTelemetry SDK with OTLP exporter
-- .NET ActivitySource for custom spans
-- HTTP client instrumentation for service-to-service calls
-
-## Performance & Cost
-
-**Performance Impact:**
-- Policy execution: ~5ms per request (Liquid templates)
-- Trace emission: Fire-and-forget, non-blocking
-- API latency: < 1% increase
-- CPU overhead: < 3%
-
-**Azure Costs (UK South):**
-- Container Apps (0.5 vCPU, 1Gi): ~£35/month
-- APIM Developer SKU: ~£40/month
-- Function App Consumption: Pay-per-use
-- Egress: ~£5-10/month
-
-**Grafana Cloud:**
-- Free tier: 50GB traces/month
-- ~200k-500k requests per GB depending on span size
-- 10M requests/month ≈ 20-50GB ≈ Within free tier ✅
-
-## Technical Details
-
-### Why deployment.environment is Required
-
-Grafana Cloud's Tempo metrics generator creates RED metrics from traces using configured dimensions. The `deployment.environment` resource attribute is typically configured as a required dimension. Without it, metrics aren't generated, and services don't appear in Application Observability.
-
-### Resource vs Span Attributes
-
-- **Resource attributes:** Apply to ALL spans from a service (e.g., service.name, deployment.environment)
-- **Span attributes:** Specific to individual operations (e.g., http.method, peer.service)
-
-The Tempo metrics generator requires `deployment.environment` at the **resource level**, not span level.
-
-### OTLP Span Format
-
-The policy generates OTLP JSON spans following the OpenTelemetry specification:
+The policy uses Azure APIM's Liquid template engine to dynamically build OTLP JSON payloads at runtime:
 
 ```json
 {
-  "resourceSpans": [{
-    "resource": {
-      "attributes": [
-        {"key": "service.name", "value": {"stringValue": "apim-gateway"}},
-        {"key": "deployment.environment", "value": {"stringValue": "production"}}
-      ]
-    },
-    "scopeSpans": [{
-      "spans": [{
-        "traceId": "...",
-        "spanId": "...",
-        "parentSpanId": "...",
-        "name": "apim: GET /endpoint",
-        "kind": 2,
-        "attributes": [...]
-      }]
-    }]
-  }]
+  "traceId": "{{context.Variables.trace_id}}",
+  "attributes": [
+    { "key": "http.method", "value": { "stringValue": "{{context.Request.Method}}" } },
+    { "key": "http.status_code", "value": { "intValue": {{context.Response.StatusCode}} } }
+  ]
 }
 ```
 
-## Files
+**Available context variables:**
+- Request: `{{context.Request.Method}}`, `{{context.Request.Url}}`, `{{context.Request.IpAddress}}`
+- Response: `{{context.Response.StatusCode}}`
+- API: `{{context.Api.Name}}`, `{{context.Product.Name}}`
+- Deployment: `{{context.Deployment.Region}}`
+- Custom: `{{context.Variables.your_variable}}`
 
-- `README.md` - This documentation
-- `apim-policy.xml` - APIM policy with Liquid templates (testing/single API)
-- `apim-policy-fragment.xml` - Policy fragment for production (multi-API)
-- `alloy-config.alloy` - Alloy collector configuration
-- `main.bicep` - Complete Azure infrastructure (APIM, Alloy, Functions)
-- `deploy.sh` - Automated deployment script
-- `test-tracing.sh` - Test script for distributed tracing scenarios
-- `function-app-csharp/` - C# Function App with OpenTelemetry
-  - `OrderService.cs` - Order creation with multi-service calls
-  - `InventoryService.cs` - Product availability checks
-  - `PaymentService.cs` - Payment processing
-  - `EchoFunction.cs` - Simple test endpoint
+## Performance & Cost
 
-## Resources
+**Performance:**
+- Policy execution: ~5ms per request
+- Non-blocking trace emission (fire-and-forget)
+- <1% latency impact
 
-- [OpenTelemetry Docs](https://opentelemetry.io/docs/)
-- [Grafana Alloy Docs](https://grafana.com/docs/alloy/)
-- [Azure APIM Policies](https://learn.microsoft.com/azure/api-management/api-management-policies)
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
+**Cost (example):**
+- OTLP Collector (Azure Container Apps, 0.5 vCPU): ~$35/month
+- Grafana Cloud free tier: 50GB traces/month (~10M+ requests)
+- Total: $35-40/month for complete distributed tracing
 
 ## License
 
 MIT License - Free to use and modify
 
-## Contributing
+## Resources
 
-Issues and pull requests welcome!
-
----
-
-**Example working trace:** `33391e2c4e6b4428a5eb8844b2171ba8` (available in Grafana Labs demo environment)
+- [OpenTelemetry Documentation](https://opentelemetry.io/docs/)
+- [W3C Trace Context Specification](https://www.w3.org/TR/trace-context/)
+- [Azure APIM Policy Reference](https://learn.microsoft.com/azure/api-management/api-management-policies)
+- [Grafana Alloy Documentation](https://grafana.com/docs/alloy/)
