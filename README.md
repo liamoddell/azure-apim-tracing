@@ -33,19 +33,32 @@ Without distributed tracing, you see APIM and backend as separate systems. When 
 
 **Verified with:** Azure APIM Developer SKU, Azure Functions, Grafana Cloud Tempo
 
-## Quick Start (Experienced Users)
+## Implementation Approaches
 
-Already have Grafana Cloud and an OTLP collector? Just apply the policy:
+### Quick Start (Testing/Single API)
 
 1. **Download:** `apim-policy.xml`
-2. **Edit 3 lines:**
-   - Line 80: Your OTLP endpoint URL
-   - Line 160: Your backend's `service.name` (for peer.service)
-   - Line 217: Your environment name (e.g., "production")
+2. **Customise:**
+   - Line 109: OTLP endpoint URL
+   - Line 160: Backend service name (must match backend's `service.name`)
+   - Line 131: Environment (production/staging/dev)
 3. **Apply:** APIM → APIs → Your API → Policies → Paste → Save
-4. **Verify:** Backend exports traces to same collector and sets `deployment.environment` resource attribute
 
-Done. Test with a request and check Grafana Tempo.
+### Production (Policy Fragments)
+
+For multi-API deployments, use fragments for centralised management:
+
+1. **Create Named Value:** `alloy-otlp-endpoint` = `https://your-alloy.azurecontainerapps.io`
+2. **Create Fragment:** Upload `apim-policy-fragment.xml` with ID `otlp-tracing`
+3. **Apply to APIs:**
+   ```xml
+   <outbound>
+       <include-fragment fragment-id="otlp-tracing" />
+       <base />
+   </outbound>
+   ```
+
+**Benefits:** Update once, applies everywhere. No per-API configuration.
 
 ## Full Setup (New Users)
 
@@ -145,18 +158,38 @@ Ensure your backend:
 
 ### Step 5: Test
 
-```bash
-# Make a request through APIM
-curl https://your-apim.azure-api.net/your-api/endpoint
+The example deployment includes a realistic multi-service architecture demonstrating distributed tracing:
 
-# Check Grafana Cloud (wait 30 seconds)
-# Explore → Tempo → Query: {resource.service.name="apim-gateway"}
-# Should see spans from both APIM and backend
+**Services:**
+- **Orders Service:** Creates orders, orchestrates inventory and payment checks
+- **Inventory Service:** Checks product availability
+- **Payment Service:** Processes payments (90% success rate for testing failures)
+- **Echo Service:** Simple test endpoint
+
+**Test distributed tracing:**
+```bash
+# Create an order (generates 4-service trace)
+curl -X POST https://your-apim.azure-api.net/api/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"productId":"LAPTOP-001","quantity":2}'
+
+# Check inventory
+curl https://your-apim.azure-api.net/api/inventory/LAPTOP-001
+
+# Use the test script
+./test-tracing.sh https://your-apim.azure-api.net
 ```
 
-Verify in Grafana Cloud:
-- **Tempo → Service Graph:** Should show `apim-gateway` → `your-backend-service`
-- **Application Observability:** Both services listed (not "uninstrumented")
+**Verify in Grafana Cloud:**
+- **Tempo → Service Graph:** `apim-gateway` → `backend-service` with service dependencies
+- **Application Observability:** Both services with RED metrics
+- **Trace view:** Complete trace showing:
+  ```
+  apim-gateway (POST /orders)
+    └─> backend-service (CreateOrder)
+        ├─> backend-service (CheckInventory)
+        └─> backend-service (ProcessPayment)
+  ```
 
 ## Architecture
 
@@ -243,45 +276,65 @@ Look for errors or connection issues to Grafana Cloud.
 
 ### Custom Span Attributes
 
-Add custom attributes to the `attributes` array (around line 111):
+Add custom attributes in the Liquid template (line 148+):
 
-```csharp
-new JObject(
-    new JProperty("key", "custom.attribute"),
-    new JProperty("value", new JObject(new JProperty("stringValue", "custom-value")))
-)
+```json
+{ "key": "custom.attribute", "value": { "stringValue": "{{context.Variables.my_value}}" } }
 ```
 
 ### Environment-Based Configuration
 
-Use APIM Named Values for environment-specific configuration:
+Use APIM Named Values (recommended for production):
 
 1. Create Named Value: `alloy-endpoint`
-2. Reference in policy: `<set-url>{{alloy-endpoint}}/v1/traces</set-url>`
+2. Reference in fragment: `<set-url>{{alloy-endpoint}}/v1/traces</set-url>`
 
 ### Multi-Region Deployment
 
 For multi-region APIM:
 1. Deploy Alloy in each region
 2. Use region-specific Named Values
-3. `cloud.region` automatically captures deployment region
+3. `cloud.region` automatically captures deployment region from `context.Deployment.Region`
+
+### Backend Service Requirements
+
+For complete distributed tracing, ensure backends:
+
+1. **Propagate traceparent header** (automatic with most OTEL SDKs)
+2. **Set resource attributes:**
+   ```csharp
+   .ConfigureResource(resource => resource
+       .AddService("backend-service", "1.0.0")
+       .AddAttributes(new Dictionary<string, object>
+       {
+           ["deployment.environment"] = "production"  // Required
+       }))
+   ```
+3. **Export to same Alloy endpoint**
+
+The included C# Function App demonstrates this with:
+- OpenTelemetry SDK with OTLP exporter
+- .NET ActivitySource for custom spans
+- HTTP client instrumentation for service-to-service calls
 
 ## Performance & Cost
 
 **Performance Impact:**
-- Policy execution: < 10ms per request
-- Trace emission: Async/non-blocking
+- Policy execution: ~5ms per request (Liquid templates)
+- Trace emission: Fire-and-forget, non-blocking
 - API latency: < 1% increase
-- CPU overhead: < 5%
+- CPU overhead: < 3%
 
-**Azure Costs:**
-- Container Apps (0.5 vCPU, 1Gi): ~$40/month
-- APIM policy: No additional cost
-- Egress: ~$5-10/month
+**Azure Costs (UK South):**
+- Container Apps (0.5 vCPU, 1Gi): ~£35/month
+- APIM Developer SKU: ~£40/month
+- Function App Consumption: Pay-per-use
+- Egress: ~£5-10/month
 
 **Grafana Cloud:**
-- Free tier: 50GB traces/month = ~200k-500k requests per GB
-- Example: 10M requests/month ≈ 20-50GB ≈ Free tier ✅
+- Free tier: 50GB traces/month
+- ~200k-500k requests per GB depending on span size
+- 10M requests/month ≈ 20-50GB ≈ Within free tier ✅
 
 ## Technical Details
 
@@ -326,8 +379,17 @@ The policy generates OTLP JSON spans following the OpenTelemetry specification:
 ## Files
 
 - `README.md` - This documentation
-- `apim-policy.xml` - APIM policy template (use this)
-- `alloy-config.alloy` - Alloy configuration reference
+- `apim-policy.xml` - APIM policy with Liquid templates (testing/single API)
+- `apim-policy-fragment.xml` - Policy fragment for production (multi-API)
+- `alloy-config.alloy` - Alloy collector configuration
+- `main.bicep` - Complete Azure infrastructure (APIM, Alloy, Functions)
+- `deploy.sh` - Automated deployment script
+- `test-tracing.sh` - Test script for distributed tracing scenarios
+- `function-app-csharp/` - C# Function App with OpenTelemetry
+  - `OrderService.cs` - Order creation with multi-service calls
+  - `InventoryService.cs` - Product availability checks
+  - `PaymentService.cs` - Payment processing
+  - `EchoFunction.cs` - Simple test endpoint
 
 ## Resources
 

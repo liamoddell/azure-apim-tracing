@@ -1,0 +1,184 @@
+<!--
+    Azure APIM Policy Fragment for OTLP Distributed Tracing
+
+    This fragment enables distributed tracing and should be included in your API policies.
+    It handles W3C Trace Context propagation and sends traces to Grafana Alloy.
+
+    Prerequisites:
+    - Create a Named Value called "alloy-otlp-endpoint" with your Alloy URL
+    - Apply this fragment in the <outbound> section of your API policy
+
+    Usage in API Policy:
+    <policies>
+        <inbound>
+            <base />
+        </inbound>
+        <outbound>
+            <include-fragment fragment-id="otlp-tracing" />
+            <base />
+        </outbound>
+    </policies>
+
+    Configuration:
+    - Edit line 77 to set the correct backend service name for peer.service
+    - Edit line 48 to set deployment.environment (production, staging, dev)
+-->
+<fragment>
+    <!--
+        Parse incoming traceparent header to extract parent span ID
+        Format: 00-{traceId}-{spanId}-{flags}
+    -->
+    <set-variable name="parent_span_id" value="@{
+        var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
+        if (traceparentHeader.Value == null || !traceparentHeader.Value.Any()) {
+            return null;
+        }
+        string traceparent = traceparentHeader.Value.First();
+        if (string.IsNullOrEmpty(traceparent)) {
+            return null;
+        }
+        string[] parts = traceparent.Split('-');
+        if (parts.Length >= 3) {
+            return parts[2]; // Current span becomes parent
+        }
+        return null;
+    }" />
+
+    <!-- Generate new span ID and update traceparent header -->
+    <set-header name="traceparent" exists-action="override">
+        <value>@{
+            const string allowedChars = "abcdef0123456789";
+            int spanIdLength = 16;
+            Random rand = new Random();
+            char[] spanIdChars = new char[spanIdLength];
+
+            // Generate random span ID
+            for (int i = 0; i < spanIdLength; i++) {
+                spanIdChars[i] = allowedChars[rand.Next(0, allowedChars.Length)];
+            }
+            string newSpanId = new string(spanIdChars);
+
+            // Check if traceparent already exists
+            var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals("traceparent", StringComparison.OrdinalIgnoreCase));
+            string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : null;
+            string traceId = "";
+
+            if (string.IsNullOrEmpty(traceparent)) {
+                // Generate new trace ID (32 hex chars)
+                traceId = Guid.NewGuid().ToString().Replace("-", "");
+            } else {
+                // Extract existing trace ID
+                string[] parts = traceparent.Split('-');
+                traceId = parts.Length >= 2 ? parts[1] : Guid.NewGuid().ToString().Replace("-", "");
+            }
+
+            // Return new traceparent: version-traceId-spanId-flags
+            return "00-" + traceId + "-" + newSpanId + "-01";
+        }</value>
+    </set-header>
+
+    <!--
+        Extract trace context and prepare variables for OTLP payload
+    -->
+    <set-variable name="trace_id" value="@{
+        var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
+        string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : &quot;00-00000000000000000000000000000000-0000000000000000-00&quot;;
+        return traceparent.Split('-')[1];
+    }" />
+
+    <set-variable name="span_id" value="@{
+        var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
+        string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : &quot;00-00000000000000000000000000000000-0000000000000000-00&quot;;
+        return traceparent.Split('-')[2];
+    }" />
+
+    <set-variable name="start_time_nanos" value="@{
+        long startTimeMs = ((DateTimeOffset)context.Timestamp).ToUnixTimeMilliseconds();
+        return (startTimeMs * 1000000).ToString();
+    }" />
+
+    <set-variable name="end_time_nanos" value="@{
+        long endTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return (endTimeMs * 1000000).ToString();
+    }" />
+
+    <set-variable name="span_name" value="@($"apim: {context.Request.Method} {context.Request.Url.Path}")" />
+
+    <set-variable name="api_name" value="@(context.Api.Name)" />
+    <set-variable name="product_name" value="@(context.Product?.Name ?? "none")" />
+    <set-variable name="subscription_name" value="@(context.Subscription?.Name ?? "none")" />
+    <set-variable name="request_id" value="@(context.RequestId)" />
+    <set-variable name="deployment_region" value="@(context.Deployment.Region)" />
+    <set-variable name="request_method" value="@(context.Request.Method)" />
+    <set-variable name="request_path" value="@(context.Request.Url.Path)" />
+    <set-variable name="request_url" value="@(context.Request.Url.ToString())" />
+    <set-variable name="request_host" value="@(context.Request.Url.Host)" />
+    <set-variable name="client_ip" value="@(context.Request.IpAddress)" />
+    <set-variable name="response_status" value="@(context.Response.StatusCode)" />
+
+    <!--
+        Send OTLP trace span to Grafana Alloy
+        Fire-and-forget: Does not block API response
+    -->
+    <send-request mode="new" response-variable-name="otlp-response" ignore-error="true">
+        <!-- Uses Named Value for centralized configuration -->
+        <set-url>{{alloy-otlp-endpoint}}/v1/traces</set-url>
+        <set-method>POST</set-method>
+
+        <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+        </set-header>
+
+        <!-- Build OTLP JSON span payload using Liquid template -->
+        <set-body template="liquid">
+{
+  "resourceSpans": [{
+    "resource": {
+      "attributes": [
+        { "key": "service.name", "value": { "stringValue": "apim-gateway" } },
+        { "key": "service.version", "value": { "stringValue": "1.0.0" } },
+        { "key": "service.namespace", "value": { "stringValue": "azure-apim" } },
+        { "key": "telemetry.sdk.name", "value": { "stringValue": "apim-policy" } },
+        { "key": "telemetry.sdk.language", "value": { "stringValue": "csharp" } },
+        { "key": "telemetry.sdk.version", "value": { "stringValue": "2.0.0" } },
+        { "key": "cloud.provider", "value": { "stringValue": "azure" } },
+        { "key": "cloud.platform", "value": { "stringValue": "azure_apim" } },
+        { "key": "cloud.region", "value": { "stringValue": "{{context.Variables.deployment_region}}" } },
+        { "key": "deployment.environment", "value": { "stringValue": "production" } }
+      ]
+    },
+    "scopeSpans": [{
+      "scope": {
+        "name": "apim-instrumentation"
+      },
+      "spans": [{
+        "traceId": "{{context.Variables.trace_id}}",
+        "spanId": "{{context.Variables.span_id}}",
+        {% if context.Variables.parent_span_id != null %}
+        "parentSpanId": "{{context.Variables.parent_span_id}}",
+        {% endif %}
+        "name": "{{context.Variables.span_name}}",
+        "kind": 2,
+        "startTimeUnixNano": "{{context.Variables.start_time_nanos}}",
+        "endTimeUnixNano": "{{context.Variables.end_time_nanos}}",
+        "attributes": [
+          { "key": "http.method", "value": { "stringValue": "{{context.Variables.request_method}}" } },
+          { "key": "http.target", "value": { "stringValue": "{{context.Variables.request_path}}" } },
+          { "key": "http.url", "value": { "stringValue": "{{context.Variables.request_url}}" } },
+          { "key": "http.host", "value": { "stringValue": "{{context.Variables.request_host}}" } },
+          { "key": "http.status_code", "value": { "intValue": {{context.Variables.response_status}} } },
+          { "key": "http.client_ip", "value": { "stringValue": "{{context.Variables.client_ip}}" } },
+          { "key": "apim.api.name", "value": { "stringValue": "{{context.Variables.api_name}}" } },
+          { "key": "apim.product.name", "value": { "stringValue": "{{context.Variables.product_name}}" } },
+          { "key": "apim.subscription.name", "value": { "stringValue": "{{context.Variables.subscription_name}}" } },
+          { "key": "apim.request.id", "value": { "stringValue": "{{context.Variables.request_id}}" } },
+          { "key": "apim.region", "value": { "stringValue": "{{context.Variables.deployment_region}}" } },
+          { "key": "peer.service", "value": { "stringValue": "backend-service" } }
+        ]
+      }]
+    }]
+  }]
+}
+        </set-body>
+    </send-request>
+</fragment>

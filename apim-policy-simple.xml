@@ -32,41 +32,40 @@
             return null;
         }" />
 
-        <!-- Generate APIM's span ID and store it -->
-        <set-variable name="apim_span_id" value="@{
+        <!-- Generate APIM span ID first -->
+        <set-variable name="apim_span_id_final" value="@{
             const string allowedChars = &quot;abcdef0123456789&quot;;
             int spanIdLength = 16;
             Random rand = new Random();
             char[] spanIdChars = new char[spanIdLength];
-
             for (int i = 0; i &lt; spanIdLength; i++) {
                 spanIdChars[i] = allowedChars[rand.Next(0, allowedChars.Length)];
             }
             return new string(spanIdChars);
         }" />
 
-        <!-- Generate new traceparent for backend with APIM's span as parent -->
+        <!-- Generate traceparent using the stored span ID -->
         <set-header name="traceparent" exists-action="override">
             <value>@{
-                // Get APIM's span ID that we just generated
-                string apimSpanId = (string)context.Variables["apim_span_id"];
+                // Read the span ID we just generated
+                string apimSpanId = (string)context.Variables[&quot;apim_span_id_final&quot;];
 
                 // Check if traceparent already exists
-                var traceparentHeader = context.Request.Headers.FirstOrDefault(h =&gt; h.Key.Equals("traceparent", StringComparison.OrdinalIgnoreCase));
+                var traceparentHeader = context.Request.Headers.FirstOrDefault(h =&gt; h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
                 string traceparent = (traceparentHeader.Value != null &amp;&amp; traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : null;
-                string traceId = "";
+                string traceId = &quot;&quot;;
 
                 if (string.IsNullOrEmpty(traceparent)) {
                     // Generate new trace ID (32 hex chars)
-                    traceId = Guid.NewGuid().ToString().Replace("-", "");
+                    traceId = Guid.NewGuid().ToString().Replace(&quot;-&quot;, &quot;&quot;);
                 } else {
                     // Extract existing trace ID
                     string[] parts = traceparent.Split('-');
-                    traceId = parts.Length &gt;= 2 ? parts[1] : Guid.NewGuid().ToString().Replace("-", "");
+                    traceId = parts.Length &gt;= 2 ? parts[1] : Guid.NewGuid().ToString().Replace(&quot;-&quot;, &quot;&quot;);
                 }
 
-                // Return traceparent with APIM's span ID (backend will see this as parent)
-                return "00-" + traceId + "-" + apimSpanId + "-01";
+                // Return traceparent with APIM's span ID
+                return &quot;00-&quot; + traceId + &quot;-&quot; + apimSpanId + &quot;-01&quot;;
             }</value>
         </set-header>
 
@@ -79,18 +78,16 @@
 
     <outbound>
         <!--
-            Extract trace context and prepare variables for OTLP payload
+            Extract trace ID from traceparent, use stored span ID
         -->
         <set-variable name="trace_id" value="@{
-            var traceparentHeader = context.Request.Headers.FirstOrDefault(h => h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
-            string traceparent = (traceparentHeader.Value != null && traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : &quot;00-00000000000000000000000000000000-0000000000000000-00&quot;;
+            var traceparentHeader = context.Request.Headers.FirstOrDefault(h =&gt; h.Key.Equals(&quot;traceparent&quot;, StringComparison.OrdinalIgnoreCase));
+            string traceparent = (traceparentHeader.Value != null &amp;&amp; traceparentHeader.Value.Any()) ? traceparentHeader.Value.First() : &quot;00-00000000000000000000000000000000-0000000000000000-00&quot;;
             return traceparent.Split('-')[1];
         }" />
 
-        <!-- Read APIM's span ID from the variable we set in inbound -->
-        <set-variable name="span_id" value="@{
-            return (string)context.Variables["apim_span_id"];
-        }" />
+        <!-- Use the span ID we generated and stored in inbound -->
+        <set-variable name="span_id" value="@((string)context.Variables[&quot;apim_span_id_final&quot;])" />
 
         <set-variable name="start_time_nanos" value="@{
             long startTimeMs = ((DateTimeOffset)context.Timestamp).ToUnixTimeMilliseconds();
@@ -102,11 +99,10 @@
             return (endTimeMs * 1000000).ToString();
         }" />
 
-        <set-variable name="span_name" value="@($"apim: {context.Request.Method} {context.Request.Url.Path}")" />
-
+        <set-variable name="span_name" value="@($&quot;apim: {context.Request.Method} {context.Request.Url.Path}&quot;)" />
         <set-variable name="api_name" value="@(context.Api.Name)" />
-        <set-variable name="product_name" value="@(context.Product?.Name ?? "none")" />
-        <set-variable name="subscription_name" value="@(context.Subscription?.Name ?? "none")" />
+        <set-variable name="product_name" value="@(context.Product?.Name ?? &quot;none&quot;)" />
+        <set-variable name="subscription_name" value="@(context.Subscription?.Name ?? &quot;none&quot;)" />
         <set-variable name="request_id" value="@(context.RequestId)" />
         <set-variable name="deployment_region" value="@(context.Deployment.Region)" />
         <set-variable name="request_method" value="@(context.Request.Method)" />
@@ -122,9 +118,8 @@
         -->
         <send-request mode="new" response-variable-name="otlp-response" ignore-error="true">
             <!-- Replace with your Alloy OTLP HTTP endpoint -->
-            <set-url>https://grafana-alloy.victorioussmoke-ba732476.uksouth.azurecontainerapps.io/v1/traces</set-url>
+            <set-url>https://ALLOY_OTLP_ENDPOINT/v1/traces</set-url>
             <set-method>POST</set-method>
-
             <set-header name="Content-Type" exists-action="override">
                 <value>application/json</value>
             </set-header>
@@ -139,7 +134,7 @@
         { "key": "service.version", "value": { "stringValue": "1.0.0" } },
         { "key": "service.namespace", "value": { "stringValue": "azure-apim" } },
         { "key": "telemetry.sdk.name", "value": { "stringValue": "apim-policy" } },
-        { "key": "telemetry.sdk.language", "value": { "stringValue": "dotnet" } },
+        { "key": "telemetry.sdk.language", "value": { "stringValue": "csharp" } },
         { "key": "telemetry.sdk.version", "value": { "stringValue": "2.0.0" } },
         { "key": "cloud.provider", "value": { "stringValue": "azure" } },
         { "key": "cloud.platform", "value": { "stringValue": "azure_apim" } },
@@ -173,7 +168,9 @@
           { "key": "apim.subscription.name", "value": { "stringValue": "{{context.Variables.subscription_name}}" } },
           { "key": "apim.request.id", "value": { "stringValue": "{{context.Variables.request_id}}" } },
           { "key": "apim.region", "value": { "stringValue": "{{context.Variables.deployment_region}}" } },
-          { "key": "peer.service", "value": { "stringValue": "function-app-backend" } }
+          { "key": "peer.service", "value": { "stringValue": "backend-service" } },
+          { "key": "deployment.environment", "value": { "stringValue": "demo" } },
+          { "key": "cloud.region", "value": { "stringValue": "" } }
         ]
       }]
     }]

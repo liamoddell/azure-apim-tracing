@@ -30,6 +30,9 @@ apim-policy-configured.xml
 *-demo.xml
 function-app/
 function-app-csharp/
+load-test.sh
+test-tracing.sh
+TESTING.md
 
 # Documentation
 *.pdf
