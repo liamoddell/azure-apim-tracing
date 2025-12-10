@@ -20,8 +20,8 @@
     </policies>
 
     Configuration:
-    - Edit line 77 to set the correct backend service name for peer.service
-    - Edit line 48 to set deployment.environment (production, staging, dev)
+    - Edit line 176 to set the correct backend service name for peer.service
+    - Edit line 147 to set deployment.environment (production, staging, dev)
 -->
 <fragment>
     <!--

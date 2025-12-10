@@ -7,7 +7,9 @@
     3. Sending OTLP trace spans to Grafana Alloy asynchronously
 
     Configuration required:
-    - Replace ALLOY_OTLP_ENDPOINT with your Alloy ingress URL
+    - Line 121: Replace ALLOY_OTLP_ENDPOINT with your Alloy ingress URL
+    - Line 171: Set peer.service to match your backend's service.name
+    - Line 142: Set deployment.environment (production, staging, dev)
     - Apply at API or Global policy level
 -->
 <policies>

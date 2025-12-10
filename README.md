@@ -38,11 +38,22 @@ Without distributed tracing, you see APIM and backend as separate systems. When 
 ### Quick Start (Testing/Single API)
 
 1. **Download:** `apim-policy.xml`
-2. **Customise:**
-   - Line 109: OTLP endpoint URL
-   - Line 160: Backend service name (must match backend's `service.name`)
-   - Line 131: Environment (production/staging/dev)
+2. **Customise 3 values:**
+   - **Line 125**: OTLP endpoint URL
+     ```xml
+     <set-url>https://your-alloy.azurecontainerapps.io/v1/traces</set-url>
+     ```
+   - **Line 176**: Backend service name (must match backend's `service.name`)
+     ```json
+     { "key": "peer.service", "value": { "stringValue": "your-backend-service" } }
+     ```
+   - **Line 147**: Environment name (production/staging/dev)
+     ```json
+     { "key": "deployment.environment", "value": { "stringValue": "production" } }
+     ```
 3. **Apply:** APIM → APIs → Your API → Policies → Paste → Save
+
+**How it works:** The policy uses Liquid templates to dynamically build OTLP JSON payloads with context variables (e.g., `{{context.Variables.trace_id}}`, `{{context.Request.Method}}`), generating proper OpenTelemetry spans at runtime.
 
 ### Production (Policy Fragments)
 
@@ -116,20 +127,20 @@ See `alloy-config.alloy` for the configuration (automatically embedded in Contai
 1. Download `apim-policy.xml`
 2. Customize these 3 values:
 
-   **Line 80** - Alloy endpoint:
+   **Line 125** - Alloy endpoint:
    ```xml
    <set-url>https://your-alloy.azurecontainerapps.io/v1/traces</set-url>
    ```
 
-   **Line 160** - Backend service name:
-   ```csharp
-   new JProperty("value", new JObject(new JProperty("stringValue", "your-backend-service")))
+   **Line 176** - Backend service name:
+   ```json
+   { "key": "peer.service", "value": { "stringValue": "your-backend-service" } }
    ```
    ⚠️ Must exactly match your backend's `service.name` resource attribute
 
-   **Line 217** - Environment:
-   ```csharp
-   new JProperty("value", new JObject(new JProperty("stringValue", "production")))
+   **Line 147** - Environment:
+   ```json
+   { "key": "deployment.environment", "value": { "stringValue": "production" } }
    ```
 
 3. Apply via Azure Portal or CLI:
@@ -276,11 +287,21 @@ Look for errors or connection issues to Grafana Cloud.
 
 ### Custom Span Attributes
 
-Add custom attributes in the Liquid template (line 148+):
+The policy uses **Liquid templates** to dynamically build OTLP JSON payloads. Add custom attributes in the `attributes` array (around line 165+):
 
 ```json
-{ "key": "custom.attribute", "value": { "stringValue": "{{context.Variables.my_value}}" } }
+{ "key": "custom.attribute", "value": { "stringValue": "{{context.Variables.my_value}}" } },
+{ "key": "custom.user_id", "value": { "stringValue": "{{context.User.Id}}" } }
 ```
+
+**Available context variables:**
+- `{{context.Request.Method}}`, `{{context.Request.Url}}`
+- `{{context.Response.StatusCode}}`
+- `{{context.Variables.your_variable}}`
+- `{{context.Api.Name}}`, `{{context.Product.Name}}`
+- `{{context.Deployment.Region}}`
+
+The Liquid template is evaluated at runtime, allowing dynamic span attributes based on request/response context.
 
 ### Environment-Based Configuration
 
