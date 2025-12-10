@@ -4,12 +4,12 @@ Production-ready APIM policy for distributed tracing using W3C Trace Context and
 
 ## What This Is
 
-An Azure API Management policy that enables complete distributed tracing across your API gateway and backend services. Traces are sent to any OTLP-compatible collector (Grafana Alloy, Jaeger, Tempo, etc.) using the OpenTelemetry Protocol.
+An Azure API Management policy that enables complete distributed tracing across your API gateway and downstream services. Traces are sent to any OTLP-compatible collector (Grafana Alloy, Jaeger, Tempo, etc.) using the OpenTelemetry Protocol.
 
 **Key capabilities:**
 - ✅ W3C Trace Context propagation via `traceparent` header
 - ✅ OTLP span generation with Liquid templates
-- ✅ Service Graph integration (shows APIM → Backend connections)
+- ✅ Service Graph integration (shows APIM → downstream service connections)
 - ✅ Application Observability with RED metrics
 - ✅ Vendor-neutral (works with any OTLP collector)
 
@@ -18,7 +18,7 @@ An Azure API Management policy that enables complete distributed tracing across 
 ### Policy Files
 
 **`apim-policy.xml`** - Complete policy for single API testing/deployment
-- Customize 3 lines: endpoint URL (line 125), backend service name (line 176), environment (line 147)
+- Customize 3 lines: collector endpoint URL (line 125), downstream service name (line 176), environment (line 147)
 - Uses Liquid templates to build OTLP JSON with dynamic context variables
 - Apply via Azure Portal: API → Policies → Outbound → Paste
 
@@ -36,7 +36,7 @@ All three policy files require these values:
 | What | Where | Example |
 |------|-------|---------|
 | Collector endpoint | Line 125 (policy.xml) | `https://alloy.example.com/v1/traces` |
-| Backend service name | Line 176 (policy.xml) | Must match backend's `service.name` |
+| Downstream service name | Line 176 (policy.xml) | Must match your service's `service.name` attribute |
 | Environment | Line 147 (policy.xml) | `production`, `staging`, `dev` |
 
 ## How It Works
@@ -44,15 +44,15 @@ All three policy files require these values:
 ```
 Client Request
     ↓
-[APIM Policy]
+[APIM Policy] (this repository)
     ├─ Parse/generate traceparent header
     ├─ Build OTLP span with Liquid template
     ├─ Send to collector (fire-and-forget)
-    └─ Forward traceparent to backend
+    └─ Forward traceparent to downstream services
             ↓
-    [Backend Service]
+    [Your Downstream Services]
         ├─ Receive traceparent
-        ├─ Create child spans
+        ├─ Create child spans (via OpenTelemetry SDK)
         └─ Send to collector
                 ↓
         [OTLP Collector]
@@ -64,32 +64,32 @@ Client Request
 
 ## Requirements
 
-**APIM:**
-- Developer SKU or higher
-- Outbound policy access
+**For this APIM Policy:**
+- Azure API Management (Developer SKU or higher)
+- Outbound policy configuration access
 
-**Backend:**
-- OpenTelemetry SDK (any language)
-- Resource attributes: `service.name`, `deployment.environment`
-- Export to same collector endpoint
+**For Your Downstream Services:**
+- OpenTelemetry SDK implementation (any language)
+- Must set resource attributes: `service.name`, `deployment.environment`
+- Must export traces to same collector endpoint as APIM
 
-**Collector:**
+**OTLP Collector:**
 - OTLP HTTP support (port 4318)
 - Can be Grafana Alloy, Jaeger, Tempo, or any OTLP-compatible collector
 
 ## Critical Configuration
 
 **Service Graph Connection:**
-The `peer.service` attribute in the APIM policy (line 176) **must exactly match** the backend's `service.name` resource attribute (case-sensitive). This is how the service graph connects APIM → Backend.
+The `peer.service` attribute in the APIM policy (line 176) **must exactly match** your downstream service's `service.name` resource attribute (case-sensitive). This is how the service graph connects APIM → Your Services.
 
 ```
-APIM Policy:                          Backend Config:
-peer.service = "my-api"          →    service.name = "my-api"
-                                 ✅ MUST MATCH
+APIM Policy (line 176):                    Your Service's OpenTelemetry Config:
+peer.service = "my-api"               →    service.name = "my-api"
+                                      ✅ MUST MATCH EXACTLY
 ```
 
 **Metrics Generation:**
-The `deployment.environment` resource attribute (line 147) is required by most observability platforms to generate RED metrics (Rate, Errors, Duration).
+The `deployment.environment` value in the policy (line 147) should match the environment attribute set by your downstream services. This is required by most observability platforms to generate RED metrics (Rate, Errors, Duration).
 
 ## License
 
