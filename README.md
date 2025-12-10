@@ -79,17 +79,11 @@ Client Request
 
 ## Critical Configuration
 
-**Service Graph Connection:**
-The `peer.service` attribute in the APIM policy (line 176) **must exactly match** your downstream service's `service.name` resource attribute (case-sensitive). This is how the service graph connects APIM → Your Services.
+**Service Graph:** For the service graph to connect APIM → your services, set `peer.service` (line 176) to match your service's `service.name` attribute. Case-sensitive.
 
 ```
-APIM Policy (line 176):                    Your Service's OpenTelemetry Config:
-peer.service = "my-api"               →    service.name = "my-api"
-                                      ✅ MUST MATCH EXACTLY
+peer.service = "my-api"  →  service.name = "my-api"
 ```
-
-**Metrics Generation:**
-The `deployment.environment` value in the policy (line 147) should match the environment attribute set by your downstream services. This is required by most observability platforms to generate RED metrics (Rate, Errors, Duration).
 
 ## License
 
