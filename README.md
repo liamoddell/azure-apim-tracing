@@ -13,20 +13,6 @@ An Azure API Management policy that enables complete distributed tracing across 
 - ✅ Application Observability with RED metrics
 - ✅ Vendor-neutral (works with any OTLP collector)
 
-## Why This Exists
-
-Without distributed tracing, APIM and backend services appear as disconnected systems. When requests are slow or failing, you can't see the complete journey through your architecture.
-
-This policy provides end-to-end visibility by:
-- Creating properly linked parent-child span relationships
-- Automatically generating service topology graphs
-- Enabling root cause analysis from gateway to backend services
-- Supporting standards-based observability (OpenTelemetry, W3C)
-
-**vs. Alternatives:**
-- **EventHub/Log Analytics**: No trace relationships, delayed visibility, not real-time
-- **Application Insights**: Azure-only, expensive at scale, limited W3C Trace Context support
-
 ## Repository Contents
 
 ### Policy Files
@@ -52,19 +38,6 @@ All three policy files require these values:
 | Collector endpoint | Line 125 (policy.xml) | `https://alloy.example.com/v1/traces` |
 | Backend service name | Line 176 (policy.xml) | Must match backend's `service.name` |
 | Environment | Line 147 (policy.xml) | `production`, `staging`, `dev` |
-
-## Quick Start
-
-1. **Deploy an OTLP collector** (Grafana Alloy, Jaeger, etc.)
-2. **Download `apim-policy.xml`** and customize the 3 values above
-3. **Apply to your API** via Azure Portal or CLI
-4. **Configure your backend** to:
-   - Propagate `traceparent` header (automatic with OpenTelemetry SDKs)
-   - Set `service.name` resource attribute (must match line 176 in policy)
-   - Set `deployment.environment` resource attribute (required for metrics)
-   - Export traces to same collector
-
-**Result:** Complete distributed traces showing APIM → Backend with service graph visualization.
 
 ## How It Works
 
@@ -117,39 +90,6 @@ peer.service = "my-api"          →    service.name = "my-api"
 
 **Metrics Generation:**
 The `deployment.environment` resource attribute (line 147) is required by most observability platforms to generate RED metrics (Rate, Errors, Duration).
-
-## Liquid Template Syntax
-
-The policy uses Azure APIM's Liquid template engine to dynamically build OTLP JSON payloads at runtime:
-
-```json
-{
-  "traceId": "{{context.Variables.trace_id}}",
-  "attributes": [
-    { "key": "http.method", "value": { "stringValue": "{{context.Request.Method}}" } },
-    { "key": "http.status_code", "value": { "intValue": {{context.Response.StatusCode}} } }
-  ]
-}
-```
-
-**Available context variables:**
-- Request: `{{context.Request.Method}}`, `{{context.Request.Url}}`, `{{context.Request.IpAddress}}`
-- Response: `{{context.Response.StatusCode}}`
-- API: `{{context.Api.Name}}`, `{{context.Product.Name}}`
-- Deployment: `{{context.Deployment.Region}}`
-- Custom: `{{context.Variables.your_variable}}`
-
-## Performance & Cost
-
-**Performance:**
-- Policy execution: ~5ms per request
-- Non-blocking trace emission (fire-and-forget)
-- <1% latency impact
-
-**Cost (example):**
-- OTLP Collector (Azure Container Apps, 0.5 vCPU): ~$35/month
-- Grafana Cloud free tier: 50GB traces/month (~10M+ requests)
-- Total: $35-40/month for complete distributed tracing
 
 ## License
 
